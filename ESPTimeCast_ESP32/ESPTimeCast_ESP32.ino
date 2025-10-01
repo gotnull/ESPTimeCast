@@ -13,17 +13,28 @@
 #include <time.h>
 #include <WiFiClientSecure.h>
 
-#include "mfactoryfont.h"  // Custom font
-#include "tz_lookup.h"     // Timezone lookup, do not duplicate mapping here!
-#include "days_lookup.h"   // Languages for the Days of the Week
-#include "months_lookup.h" // Languages for the Months of the Year
+#include "mfactoryfont.h"
+#include "tz_lookup.h"
+#include "days_lookup.h"
+#include "months_lookup.h"
+
+// Disable debug prints to save ~20KB
+//#define DEBUG_SERIAL
+#ifdef DEBUG_SERIAL
+  #define DEBUG_PRINT(x) DEBUG_PRINT(x)
+  #define DEBUG_PRINTLN(x) DEBUG_PRINTLN(x)
+  #define DEBUG_PRINTF(...) DEBUG_PRINTF(__VA_ARGS__)
+#else
+  #define DEBUG_PRINT(x)
+  #define DEBUG_PRINTLN(x)
+  #define DEBUG_PRINTF(...)
+#endif
 
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
 #define MAX_DEVICES 4
-
-#define CLK_PIN 2  // orange
-#define CS_PIN 3   // green
-#define DATA_PIN 4 // yellow
+#define CLK_PIN 2
+#define CS_PIN 3
+#define DATA_PIN 4
 
 MD_Parola P = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 AsyncWebServer server(80);
@@ -45,6 +56,7 @@ String detailedDesc = "";
 // Timing and display settings
 unsigned long clockDuration = 10000;
 unsigned long weatherDuration = 5000;
+unsigned long demoDuration = 10000; // 10 seconds for demoscene
 int brightness = 7;
 bool flipDisplay = false;
 bool twelveHourToggle = false;
@@ -88,7 +100,7 @@ bool shouldFetchWeatherNow = false;
 
 unsigned long lastSwitch = 0;
 unsigned long lastColonBlink = 0;
-int displayMode = 0; // 0: Clock, 1: Weather, 2: Weather Description, 3: Countdown
+int displayMode = 0; // 0: Clock, 1: Weather, 2: Weather Description, 3: Countdown, 4: Nightscout, 5: Date, 6: Demoscene
 int currentHumidity = -1;
 bool ntpSyncSuccessful = false;
 
@@ -157,12 +169,12 @@ textEffect_t getEffectiveScrollDirection(textEffect_t desiredDirection, bool isF
 // -----------------------------------------------------------------------------
 void loadConfig()
 {
-  Serial.println(F("[CONFIG] Loading configuration..."));
+  DEBUG_PRINTLN(F("[CONFIG] Loading configuration..."));
 
   // Check if config.json exists, if not, create default
   if (!LittleFS.exists("/config.json"))
   {
-    Serial.println(F("[CONFIG] config.json not found, creating with defaults..."));
+    DEBUG_PRINTLN(F("[CONFIG] config.json not found, creating with defaults..."));
     DynamicJsonDocument doc(2048);
     doc[F("ssid")] = "";
     doc[F("password")] = "";
@@ -203,19 +215,19 @@ void loadConfig()
     {
       serializeJsonPretty(doc, f);
       f.close();
-      Serial.println(F("[CONFIG] Default config.json created."));
+      DEBUG_PRINTLN(F("[CONFIG] Default config.json created."));
     }
     else
     {
-      Serial.println(F("[ERROR] Failed to create default config.json"));
+      DEBUG_PRINTLN(F("[ERROR] Failed to create default config.json"));
     }
   }
 
-  Serial.println(F("[CONFIG] Attempting to open config.json for reading."));
+  DEBUG_PRINTLN(F("[CONFIG] Attempting to open config.json for reading."));
   File configFile = LittleFS.open("/config.json", "r");
   if (!configFile)
   {
-    Serial.println(F("[ERROR] Failed to open config.json for reading. Cannot load config."));
+    DEBUG_PRINTLN(F("[ERROR] Failed to open config.json for reading. Cannot load config."));
     return;
   }
 
@@ -225,8 +237,8 @@ void loadConfig()
 
   if (error)
   {
-    Serial.print(F("[ERROR] JSON parse failed during load: "));
-    Serial.println(error.f_str());
+    DEBUG_PRINT(F("[ERROR] JSON parse failed during load: "));
+    DEBUG_PRINTLN(error.f_str());
     return;
   }
 
@@ -246,7 +258,7 @@ void loadConfig()
   else
   {
     strlcpy(language, "en", sizeof(language));
-    Serial.println(F("[CONFIG] 'language' key not found in config.json, defaulting to 'en'."));
+    DEBUG_PRINTLN(F("[CONFIG] 'language' key not found in config.json, defaulting to 'en'."));
   }
 
   brightness = doc["brightness"] | 7;
@@ -296,7 +308,7 @@ void loadConfig()
       size_t labelLen = strlen(labelTemp);
       if (labelLen >= sizeof(countdownLabel))
       {
-        Serial.println(F("[CONFIG] label from JSON too long, truncating."));
+        DEBUG_PRINTLN(F("[CONFIG] label from JSON too long, truncating."));
       }
       strlcpy(countdownLabel, labelTemp, sizeof(countdownLabel));
     }
@@ -308,10 +320,10 @@ void loadConfig()
     countdownTargetTimestamp = 0;
     strcpy(countdownLabel, "");
     isDramaticCountdown = true;
-    Serial.println(F("[CONFIG] Countdown object not found, defaulting to disabled."));
+    DEBUG_PRINTLN(F("[CONFIG] Countdown object not found, defaulting to disabled."));
     countdownFinished = false;
   }
-  Serial.println(F("[CONFIG] Configuration loaded."));
+  DEBUG_PRINTLN(F("[CONFIG] Configuration loaded."));
 }
 
 // -----------------------------------------------------------------------------
@@ -322,13 +334,13 @@ const char *AP_SSID = "ESPTimeCast";
 
 void connectWiFi()
 {
-  Serial.println(F("[WIFI] Connecting to WiFi..."));
+  DEBUG_PRINTLN(F("[WIFI] Connecting to WiFi..."));
 
   bool credentialsExist = (strlen(ssid) > 0);
 
   if (!credentialsExist)
   {
-    Serial.println(F("[WIFI] No saved credentials. Starting AP mode directly."));
+    DEBUG_PRINTLN(F("[WIFI] No saved credentials. Starting AP mode directly."));
     WiFi.mode(WIFI_AP);
     WiFi.disconnect(true);
     delay(100);
@@ -336,19 +348,19 @@ void connectWiFi()
     if (strlen(DEFAULT_AP_PASSWORD) < 8)
     {
       WiFi.softAP(AP_SSID);
-      Serial.println(F("[WIFI] AP Mode started (no password, too short)."));
+      DEBUG_PRINTLN(F("[WIFI] AP Mode started (no password, too short)."));
     }
     else
     {
       WiFi.softAP(AP_SSID, DEFAULT_AP_PASSWORD);
-      Serial.println(F("[WIFI] AP Mode started."));
+      DEBUG_PRINTLN(F("[WIFI] AP Mode started."));
     }
 
     IPAddress apIP(192, 168, 4, 1);
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
     dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
-    Serial.print(F("[WIFI] AP IP address: "));
-    Serial.println(WiFi.softAPIP());
+    DEBUG_PRINT(F("[WIFI] AP IP address: "));
+    DEBUG_PRINTLN(WiFi.softAPIP());
     isAPMode = true;
 
     clearWiFiCredentialsInConfig();
@@ -356,13 +368,13 @@ void connectWiFi()
     strlcpy(password, "", sizeof(password));
 
     WiFiMode_t mode = WiFi.getMode();
-    Serial.printf("[WIFI] WiFi mode after setting AP: %s\n",
+    DEBUG_PRINTF("[WIFI] WiFi mode after setting AP: %s\n",
                   mode == WIFI_OFF ? "OFF" : mode == WIFI_STA  ? "STA ONLY"
                                          : mode == WIFI_AP     ? "AP ONLY"
                                          : mode == WIFI_AP_STA ? "AP + STA (Error!)"
                                                                : "UNKNOWN");
 
-    Serial.println(F("[WIFI] AP Mode Started"));
+    DEBUG_PRINTLN(F("[WIFI] AP Mode Started"));
     return;
   }
 
@@ -384,11 +396,11 @@ void connectWiFi()
     unsigned long now = millis();
     if (WiFi.status() == WL_CONNECTED)
     {
-      Serial.println("[WiFi] Connected: " + WiFi.localIP().toString());
+      DEBUG_PRINTLN("[WiFi] Connected: " + WiFi.localIP().toString());
       isAPMode = false;
 
       WiFiMode_t mode = WiFi.getMode();
-      Serial.printf("[WIFI] WiFi mode after STA connection: %s\n",
+      DEBUG_PRINTF("[WIFI] WiFi mode after STA connection: %s\n",
                     mode == WIFI_OFF ? "OFF" : mode == WIFI_STA  ? "STA ONLY"
                                            : mode == WIFI_AP     ? "AP ONLY"
                                            : mode == WIFI_AP_STA ? "AP + STA (Error!)"
@@ -409,11 +421,11 @@ void connectWiFi()
     }
     else if (now - startAttemptTime >= timeout)
     {
-      Serial.println(F("[WiFi] Failed. Starting AP mode..."));
+      DEBUG_PRINTLN(F("[WiFi] Failed. Starting AP mode..."));
       WiFi.mode(WIFI_AP);
       WiFi.softAP(AP_SSID, DEFAULT_AP_PASSWORD);
-      Serial.print(F("[WiFi] AP IP address: "));
-      Serial.println(WiFi.softAPIP());
+      DEBUG_PRINT(F("[WiFi] AP IP address: "));
+      DEBUG_PRINTLN(WiFi.softAPIP());
       dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
       isAPMode = true;
 
@@ -422,14 +434,14 @@ void connectWiFi()
       strlcpy(password, "", sizeof(password));
 
       auto mode = WiFi.getMode();
-      Serial.printf("[WIFI] WiFi mode after STA failure and setting AP: %s\n",
+      DEBUG_PRINTF("[WIFI] WiFi mode after STA failure and setting AP: %s\n",
                     mode == WIFI_OFF ? "OFF" : mode == WIFI_STA  ? "STA ONLY"
                                            : mode == WIFI_AP     ? "AP ONLY"
                                            : mode == WIFI_AP_STA ? "AP + STA (Error!)"
                                                                  : "UNKNOWN");
 
       animating = false;
-      Serial.println(F("[WIFI] AP Mode Started"));
+      DEBUG_PRINTLN(F("[WIFI] AP Mode Started"));
       break;
     }
     if (now - animTimer > 750)
@@ -466,8 +478,8 @@ void clearWiFiCredentialsInConfig()
     configFile.close();
     if (err)
     {
-      Serial.print(F("[SECURITY] Error parsing config.json: "));
-      Serial.println(err.f_str());
+      DEBUG_PRINT(F("[SECURITY] Error parsing config.json: "));
+      DEBUG_PRINTLN(err.f_str());
       return;
     }
   }
@@ -484,12 +496,12 @@ void clearWiFiCredentialsInConfig()
   File f = LittleFS.open("/config.json", "w");
   if (!f)
   {
-    Serial.println(F("[SECURITY] ERROR: Cannot write to /config.json to clear credentials!"));
+    DEBUG_PRINTLN(F("[SECURITY] ERROR: Cannot write to /config.json to clear credentials!"));
     return;
   }
   serializeJson(doc, f);
   f.close();
-  Serial.println(F("[SECURITY] Cleared WiFi credentials in config.json."));
+  DEBUG_PRINTLN(F("[SECURITY] Cleared WiFi credentials in config.json."));
 }
 
 // -----------------------------------------------------------------------------
@@ -499,7 +511,7 @@ void setupTime()
 {
   if (!isAPMode)
   {
-    Serial.println(F("[TIME] Starting NTP sync"));
+    DEBUG_PRINTLN(F("[TIME] Starting NTP sync"));
   }
 
   bool serverOk = false;
@@ -528,7 +540,7 @@ void setupTime()
   }
   else
   {
-    Serial.println(F("[TIME] NTP server lookup failed — retry sync in 30 seconds"));
+    DEBUG_PRINTLN(F("[TIME] NTP server lookup failed — retry sync in 30 seconds"));
     ntpSyncSuccessful = false;
     ntpState = NTP_SYNCING;  // instead of NTP_IDLE
     ntpStartTime = millis(); // start the failed timer (so retry delay counts from now)
@@ -540,69 +552,69 @@ void setupTime()
 // -----------------------------------------------------------------------------
 void printConfigToSerial()
 {
-  Serial.println(F("========= Loaded Configuration ========="));
-  Serial.print(F("WiFi SSID: "));
-  Serial.println(ssid);
-  Serial.print(F("WiFi Password: "));
-  Serial.println(password);
-  Serial.print(F("OpenWeather City: "));
-  Serial.println(openWeatherCity);
-  Serial.print(F("OpenWeather Country: "));
-  Serial.println(openWeatherCountry);
-  Serial.print(F("OpenWeather API Key: "));
-  Serial.println(openWeatherApiKey);
-  Serial.print(F("Temperature Unit: "));
-  Serial.println(weatherUnits);
-  Serial.print(F("Clock duration: "));
-  Serial.println(clockDuration);
-  Serial.print(F("Weather duration: "));
-  Serial.println(weatherDuration);
-  Serial.print(F("TimeZone (IANA): "));
-  Serial.println(timeZone);
-  Serial.print(F("Days of the Week/Weather description language: "));
-  Serial.println(language);
-  Serial.print(F("Brightness: "));
-  Serial.println(brightness);
-  Serial.print(F("Flip Display: "));
-  Serial.println(flipDisplay ? "Yes" : "No");
-  Serial.print(F("Show 12h Clock: "));
-  Serial.println(twelveHourToggle ? "Yes" : "No");
-  Serial.print(F("Show Day of the Week: "));
-  Serial.println(showDayOfWeek ? "Yes" : "No");
-  Serial.print(F("Show Date: "));
-  Serial.println(showDate ? "Yes" : "No");
-  Serial.print(F("Show Weather Description: "));
-  Serial.println(showWeatherDescription ? "Yes" : "No");
-  Serial.print(F("Show Humidity: "));
-  Serial.println(showHumidity ? "Yes" : "No");
-  Serial.print(F("Blinking colon: "));
-  Serial.println(colonBlinkEnabled ? "Yes" : "No");
-  Serial.print(F("NTP Server 1: "));
-  Serial.println(ntpServer1);
-  Serial.print(F("NTP Server 2: "));
-  Serial.println(ntpServer2);
-  Serial.print(F("Dimming Enabled: "));
-  Serial.println(dimmingEnabled);
-  Serial.print(F("Dimming Start Hour: "));
-  Serial.println(dimStartHour);
-  Serial.print(F("Dimming Start Minute: "));
-  Serial.println(dimStartMinute);
-  Serial.print(F("Dimming End Hour: "));
-  Serial.println(dimEndHour);
-  Serial.print(F("Dimming End Minute: "));
-  Serial.println(dimEndMinute);
-  Serial.print(F("Dimming Brightness: "));
-  Serial.println(dimBrightness);
-  Serial.print(F("Countdown Enabled: "));
-  Serial.println(countdownEnabled ? "Yes" : "No");
-  Serial.print(F("Countdown Target Timestamp: "));
-  Serial.println(countdownTargetTimestamp);
-  Serial.print(F("Countdown Label: "));
-  Serial.println(countdownLabel);
-  Serial.print(F("Dramatic Countdown Display: "));
-  Serial.println(isDramaticCountdown ? "Yes" : "No");
-  Serial.println(F("========================================"));
-  Serial.println();
+  DEBUG_PRINTLN(F("========= Loaded Configuration ========="));
+  DEBUG_PRINT(F("WiFi SSID: "));
+  DEBUG_PRINTLN(ssid);
+  DEBUG_PRINT(F("WiFi Password: "));
+  DEBUG_PRINTLN(password);
+  DEBUG_PRINT(F("OpenWeather City: "));
+  DEBUG_PRINTLN(openWeatherCity);
+  DEBUG_PRINT(F("OpenWeather Country: "));
+  DEBUG_PRINTLN(openWeatherCountry);
+  DEBUG_PRINT(F("OpenWeather API Key: "));
+  DEBUG_PRINTLN(openWeatherApiKey);
+  DEBUG_PRINT(F("Temperature Unit: "));
+  DEBUG_PRINTLN(weatherUnits);
+  DEBUG_PRINT(F("Clock duration: "));
+  DEBUG_PRINTLN(clockDuration);
+  DEBUG_PRINT(F("Weather duration: "));
+  DEBUG_PRINTLN(weatherDuration);
+  DEBUG_PRINT(F("TimeZone (IANA): "));
+  DEBUG_PRINTLN(timeZone);
+  DEBUG_PRINT(F("Days of the Week/Weather description language: "));
+  DEBUG_PRINTLN(language);
+  DEBUG_PRINT(F("Brightness: "));
+  DEBUG_PRINTLN(brightness);
+  DEBUG_PRINT(F("Flip Display: "));
+  DEBUG_PRINTLN(flipDisplay ? "Yes" : "No");
+  DEBUG_PRINT(F("Show 12h Clock: "));
+  DEBUG_PRINTLN(twelveHourToggle ? "Yes" : "No");
+  DEBUG_PRINT(F("Show Day of the Week: "));
+  DEBUG_PRINTLN(showDayOfWeek ? "Yes" : "No");
+  DEBUG_PRINT(F("Show Date: "));
+  DEBUG_PRINTLN(showDate ? "Yes" : "No");
+  DEBUG_PRINT(F("Show Weather Description: "));
+  DEBUG_PRINTLN(showWeatherDescription ? "Yes" : "No");
+  DEBUG_PRINT(F("Show Humidity: "));
+  DEBUG_PRINTLN(showHumidity ? "Yes" : "No");
+  DEBUG_PRINT(F("Blinking colon: "));
+  DEBUG_PRINTLN(colonBlinkEnabled ? "Yes" : "No");
+  DEBUG_PRINT(F("NTP Server 1: "));
+  DEBUG_PRINTLN(ntpServer1);
+  DEBUG_PRINT(F("NTP Server 2: "));
+  DEBUG_PRINTLN(ntpServer2);
+  DEBUG_PRINT(F("Dimming Enabled: "));
+  DEBUG_PRINTLN(dimmingEnabled);
+  DEBUG_PRINT(F("Dimming Start Hour: "));
+  DEBUG_PRINTLN(dimStartHour);
+  DEBUG_PRINT(F("Dimming Start Minute: "));
+  DEBUG_PRINTLN(dimStartMinute);
+  DEBUG_PRINT(F("Dimming End Hour: "));
+  DEBUG_PRINTLN(dimEndHour);
+  DEBUG_PRINT(F("Dimming End Minute: "));
+  DEBUG_PRINTLN(dimEndMinute);
+  DEBUG_PRINT(F("Dimming Brightness: "));
+  DEBUG_PRINTLN(dimBrightness);
+  DEBUG_PRINT(F("Countdown Enabled: "));
+  DEBUG_PRINTLN(countdownEnabled ? "Yes" : "No");
+  DEBUG_PRINT(F("Countdown Target Timestamp: "));
+  DEBUG_PRINTLN(countdownTargetTimestamp);
+  DEBUG_PRINT(F("Countdown Label: "));
+  DEBUG_PRINTLN(countdownLabel);
+  DEBUG_PRINT(F("Dramatic Countdown Display: "));
+  DEBUG_PRINTLN(isDramaticCountdown ? "Yes" : "No");
+  DEBUG_PRINTLN(F("========================================"));
+  DEBUG_PRINTLN();
 }
 
 // -----------------------------------------------------------------------------
@@ -610,26 +622,33 @@ void printConfigToSerial()
 // -----------------------------------------------------------------------------
 void handleCaptivePortal(AsyncWebServerRequest *request);
 
+// Helper to parse boolean from request
+bool getBoolParam(AsyncWebServerRequest *request) {
+  if (!request->hasParam("value", true)) return false;
+  String v = request->getParam("value", true)->value();
+  return (v == "1" || v == "true" || v == "on");
+}
+
 void setupWebServer()
 {
-  Serial.println(F("[WEBSERVER] Setting up web server..."));
+  DEBUG_PRINTLN(F("[WEBSERVER] Setting up web server..."));
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
             {
-    Serial.println(F("[WEBSERVER] Request: /"));
+    DEBUG_PRINTLN(F("[WEBSERVER] Request: /"));
     if (LittleFS.exists("/index.html")) {
       request->send(LittleFS, "/index.html", "text/html");
     } else {
-      Serial.println(F("[WEBSERVER] index.html not found in LittleFS"));
+      DEBUG_PRINTLN(F("[WEBSERVER] index.html not found in LittleFS"));
       request->send(404, "text/plain", "index.html not found. Upload data folder to LittleFS.");
     } });
 
   server.on("/config.json", HTTP_GET, [](AsyncWebServerRequest *request)
             {
-    Serial.println(F("[WEBSERVER] Request: /config.json"));
+    DEBUG_PRINTLN(F("[WEBSERVER] Request: /config.json"));
     File f = LittleFS.open("/config.json", "r");
     if (!f) {
-      Serial.println(F("[WEBSERVER] Error opening /config.json"));
+      DEBUG_PRINTLN(F("[WEBSERVER] Error opening /config.json"));
       request->send(500, "application/json", "{\"error\":\"Failed to open config.json\"}");
       return;
     }
@@ -637,8 +656,8 @@ void setupWebServer()
     DeserializationError err = deserializeJson(doc, f);
     f.close();
     if (err) {
-      Serial.print(F("[WEBSERVER] Error parsing /config.json: "));
-      Serial.println(err.f_str());
+      DEBUG_PRINT(F("[WEBSERVER] Error parsing /config.json: "));
+      DEBUG_PRINTLN(err.f_str());
       request->send(500, "application/json", "{\"error\":\"Failed to parse config.json\"}");
       return;
     }
@@ -649,20 +668,20 @@ void setupWebServer()
 
   server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request)
             {
-    Serial.println(F("[WEBSERVER] Request: /save"));
+    DEBUG_PRINTLN(F("[WEBSERVER] Request: /save"));
     DynamicJsonDocument doc(2048);
 
     File configFile = LittleFS.open("/config.json", "r");
     if (configFile) {
-      Serial.println(F("[WEBSERVER] Existing config.json found, loading for update..."));
+      DEBUG_PRINTLN(F("[WEBSERVER] Existing config.json found, loading for update..."));
       DeserializationError err = deserializeJson(doc, configFile);
       configFile.close();
       if (err) {
-        Serial.print(F("[WEBSERVER] Error parsing existing config.json: "));
-        Serial.println(err.f_str());
+        DEBUG_PRINT(F("[WEBSERVER] Error parsing existing config.json: "));
+        DEBUG_PRINTLN(err.f_str());
       }
     } else {
-      Serial.println(F("[WEBSERVER] config.json not found, starting with empty doc for save."));
+      DEBUG_PRINTLN(F("[WEBSERVER] config.json not found, starting with empty doc for save."));
     }
 
     for (int i = 0; i < request->params(); i++) {
@@ -717,10 +736,10 @@ void setupWebServer()
 
       newTargetTimestamp = mktime(&tm);
       if (newTargetTimestamp == (time_t)-1) {
-        Serial.println("[SAVE] Error converting countdown date/time to timestamp.");
+        DEBUG_PRINTLN("[SAVE] Error converting countdown date/time to timestamp.");
         newTargetTimestamp = 0;
       } else {
-        Serial.printf("[SAVE] Converted countdown target: %s -> %lu\n", countdownDateStr.c_str(), newTargetTimestamp);
+        DEBUG_PRINTF("[SAVE] Converted countdown target: %s -> %lu\n", countdownDateStr.c_str(), newTargetTimestamp);
       }
     }
 
@@ -732,15 +751,15 @@ void setupWebServer()
 
     size_t total = LittleFS.totalBytes();
     size_t used = LittleFS.usedBytes();
-    Serial.printf("[SAVE] LittleFS total bytes: %llu, used bytes: %llu\n", LittleFS.totalBytes(), LittleFS.usedBytes());
+    DEBUG_PRINTF("[SAVE] LittleFS total bytes: %llu, used bytes: %llu\n", LittleFS.totalBytes(), LittleFS.usedBytes());
 
     if (LittleFS.exists("/config.json")) {
-      Serial.println(F("[SAVE] Renaming /config.json to /config.bak"));
+      DEBUG_PRINTLN(F("[SAVE] Renaming /config.json to /config.bak"));
       LittleFS.rename("/config.json", "/config.bak");
     }
     File f = LittleFS.open("/config.json", "w");
     if (!f) {
-      Serial.println(F("[SAVE] ERROR: Failed to open /config.json for writing!"));
+      DEBUG_PRINTLN(F("[SAVE] ERROR: Failed to open /config.json for writing!"));
       DynamicJsonDocument errorDoc(256);
       errorDoc[F("error")] = "Failed to write config file.";
       String response;
@@ -750,13 +769,13 @@ void setupWebServer()
     }
 
     size_t bytesWritten = serializeJson(doc, f);
-    Serial.printf("[SAVE] Bytes written to /config.json: %u\n", bytesWritten);
+    DEBUG_PRINTF("[SAVE] Bytes written to /config.json: %u\n", bytesWritten);
     f.close();
-    Serial.println(F("[SAVE] /config.json file closed."));
+    DEBUG_PRINTLN(F("[SAVE] /config.json file closed."));
 
     File verify = LittleFS.open("/config.json", "r");
     if (!verify) {
-      Serial.println(F("[SAVE] ERROR: Failed to open /config.json for reading during verification!"));
+      DEBUG_PRINTLN(F("[SAVE] ERROR: Failed to open /config.json for reading during verification!"));
       DynamicJsonDocument errorDoc(256);
       errorDoc[F("error")] = "Verification failed: Could not re-open config file.";
       String response;
@@ -775,8 +794,8 @@ void setupWebServer()
     verify.close();
 
     if (err) {
-      Serial.print(F("[SAVE] Config corrupted after save: "));
-      Serial.println(err.f_str());
+      DEBUG_PRINT(F("[SAVE] Config corrupted after save: "));
+      DEBUG_PRINTLN(err.f_str());
       DynamicJsonDocument errorDoc(256);
       errorDoc[F("error")] = String("Config corrupted. Reboot cancelled. Error: ") + err.f_str();
       String response;
@@ -785,26 +804,26 @@ void setupWebServer()
       return;
     }
 
-    Serial.println(F("[SAVE] Config verification successful."));
+    DEBUG_PRINTLN(F("[SAVE] Config verification successful."));
     DynamicJsonDocument okDoc(128);
     okDoc[F("message")] = "Saved successfully. Rebooting...";
     String response;
     serializeJson(okDoc, response);
     request->send(200, "application/json", response);
-    Serial.println(F("[WEBSERVER] Sending success response and scheduling reboot..."));
+    DEBUG_PRINTLN(F("[WEBSERVER] Sending success response and scheduling reboot..."));
 
     request->onDisconnect([]() {
-      Serial.println(F("[WEBSERVER] Client disconnected, rebooting ESP..."));
+      DEBUG_PRINTLN(F("[WEBSERVER] Client disconnected, rebooting ESP..."));
       ESP.restart();
     }); });
 
   server.on("/restore", HTTP_POST, [](AsyncWebServerRequest *request)
             {
-    Serial.println(F("[WEBSERVER] Request: /restore"));
+    DEBUG_PRINTLN(F("[WEBSERVER] Request: /restore"));
     if (LittleFS.exists("/config.bak")) {
       File src = LittleFS.open("/config.bak", "r");
       if (!src) {
-        Serial.println(F("[WEBSERVER] Failed to open /config.bak"));
+        DEBUG_PRINTLN(F("[WEBSERVER] Failed to open /config.bak"));
         DynamicJsonDocument errorDoc(128);
         errorDoc[F("error")] = "Failed to open backup file.";
         String response;
@@ -815,7 +834,7 @@ void setupWebServer()
       File dst = LittleFS.open("/config.json", "w");
       if (!dst) {
         src.close();
-        Serial.println(F("[WEBSERVER] Failed to open /config.json for writing"));
+        DEBUG_PRINTLN(F("[WEBSERVER] Failed to open /config.json for writing"));
         DynamicJsonDocument errorDoc(128);
         errorDoc[F("error")] = "Failed to open config for writing.";
         String response;
@@ -836,12 +855,12 @@ void setupWebServer()
       serializeJson(okDoc, response);
       request->send(200, "application/json", response);
       request->onDisconnect([]() {
-        Serial.println(F("[WEBSERVER] Rebooting after restore..."));
+        DEBUG_PRINTLN(F("[WEBSERVER] Rebooting after restore..."));
         ESP.restart();
       });
 
     } else {
-      Serial.println(F("[WEBSERVER] No backup found"));
+      DEBUG_PRINTLN(F("[WEBSERVER] No backup found"));
       DynamicJsonDocument errorDoc(128);
       errorDoc[F("error")] = "No backup found.";
       String response;
@@ -851,8 +870,8 @@ void setupWebServer()
 
   server.on("/ap_status", HTTP_GET, [](AsyncWebServerRequest *request)
             {
-    Serial.print(F("[WEBSERVER] Request: /ap_status. isAPMode = "));
-    Serial.println(isAPMode);
+    DEBUG_PRINT(F("[WEBSERVER] Request: /ap_status. isAPMode = "));
+    DEBUG_PRINTLN(isAPMode);
     String json = "{\"isAP\": ";
     json += (isAPMode) ? "true" : "false";
     json += "}";
@@ -869,7 +888,7 @@ void setupWebServer()
     if (newBrightness > 15) newBrightness = 15;
     brightness = newBrightness;
     P.setIntensity(brightness);
-    Serial.printf("[WEBSERVER] Set brightness to %d\n", brightness);
+    DEBUG_PRINTF("[WEBSERVER] Set brightness to %d\n", brightness);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
   server.on("/set_scroll_speed", HTTP_POST, [](AsyncWebServerRequest *request)
@@ -882,75 +901,33 @@ void setupWebServer()
     if (newScrollSpeed < 10) newScrollSpeed = 10;
     if (newScrollSpeed > 200) newScrollSpeed = 200;
     scrollSpeed = newScrollSpeed;
-    Serial.printf("[WEBSERVER] Set scrollSpeed to %d\n", scrollSpeed);
+    DEBUG_PRINTF("[WEBSERVER] Set scrollSpeed to %d\n", scrollSpeed);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_flip", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool flip = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      flip = (v == "1" || v == "true" || v == "on");
-    }
-    flipDisplay = flip;
+  server.on("/set_flip", HTTP_POST, [](AsyncWebServerRequest *request) {
+    flipDisplay = getBoolParam(request);
     P.setZoneEffect(0, flipDisplay, PA_FLIP_UD);
     P.setZoneEffect(0, flipDisplay, PA_FLIP_LR);
-    Serial.printf("[WEBSERVER] Set flipDisplay to %d\n", flipDisplay);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_twelvehour", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool twelveHour = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      twelveHour = (v == "1" || v == "true" || v == "on");
-    }
-    twelveHourToggle = twelveHour;
-    Serial.printf("[WEBSERVER] Set twelveHourToggle to %d\n", twelveHourToggle);
+  server.on("/set_twelvehour", HTTP_POST, [](AsyncWebServerRequest *request) {
+    twelveHourToggle = getBoolParam(request);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_dayofweek", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool showDay = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      showDay = (v == "1" || v == "true" || v == "on");
-    }
-    showDayOfWeek = showDay;
-    Serial.printf("[WEBSERVER] Set showDayOfWeek to %d\n", showDayOfWeek);
+  server.on("/set_dayofweek", HTTP_POST, [](AsyncWebServerRequest *request) {
+    showDayOfWeek = getBoolParam(request);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_showdate", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool showDateVal = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      showDateVal = (v == "1" || v == "true" || v == "on");
-    }
-    showDate = showDateVal;
-    Serial.printf("[WEBSERVER] Set showDate to %d\n", showDate);
+  server.on("/set_showdate", HTTP_POST, [](AsyncWebServerRequest *request) {
+    showDate = getBoolParam(request);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_humidity", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool showHumidityNow = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      showHumidityNow = (v == "1" || v == "true" || v == "on");
-    }
-    showHumidity = showHumidityNow;
-    Serial.printf("[WEBSERVER] Set showHumidity to %d\n", showHumidity);
+  server.on("/set_humidity", HTTP_POST, [](AsyncWebServerRequest *request) {
+    showHumidity = getBoolParam(request);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_colon_blink", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool enableBlink = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      enableBlink = (v == "1" || v == "true" || v == "on");
-    }
-    colonBlinkEnabled = enableBlink;
-    Serial.printf("[WEBSERVER] Set colonBlinkEnabled to %d\n", colonBlinkEnabled);
+  server.on("/set_colon_blink", HTTP_POST, [](AsyncWebServerRequest *request) {
+    colonBlinkEnabled = getBoolParam(request);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
   server.on("/set_language", HTTP_POST, [](AsyncWebServerRequest *request)
@@ -965,99 +942,37 @@ void setupWebServer()
     lang.toLowerCase();  // Normalize to lowercase
 
     strlcpy(language, lang.c_str(), sizeof(language));              // Safe copy to char[]
-    Serial.printf("[WEBSERVER] Set language to '%s'\n", language);  // Use quotes for debug
+    DEBUG_PRINTF("[WEBSERVER] Set language to '%s'\n", language);  // Use quotes for debug
 
     shouldFetchWeatherNow = true;
 
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_weatherdesc", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool showDesc = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      showDesc = (v == "1" || v == "true" || v == "on");
-    }
-
-    if (showWeatherDescription == true && showDesc == false) {
-      Serial.println(F("[WEBSERVER] showWeatherDescription toggled OFF. Checking display mode..."));
-      if (displayMode == 2) {
-        Serial.println(F("[WEBSERVER] Currently in Weather Description mode. Forcing mode advance/cleanup."));
-        advanceDisplayMode();
-      }
-    }
-
+  server.on("/set_weatherdesc", HTTP_POST, [](AsyncWebServerRequest *request) {
+    bool showDesc = getBoolParam(request);
+    if (showWeatherDescription && !showDesc && displayMode == 2) advanceDisplayMode();
     showWeatherDescription = showDesc;
-    Serial.printf("[WEBSERVER] Set Show Weather Description to %d\n", showWeatherDescription);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_units", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      if (v == "1" || v == "true" || v == "on") {
-        strcpy(weatherUnits, "imperial");
-        tempSymbol = ']';
-      } else {
-        strcpy(weatherUnits, "metric");
-        tempSymbol = '[';
-      }
-      Serial.printf("[WEBSERVER] Set weatherUnits to %s\n", weatherUnits);
-      shouldFetchWeatherNow = true;
-      request->send(200, "application/json", "{\"ok\":true}");
-    } else {
-      request->send(400, "application/json", "{\"error\":\"Missing value parameter\"}");
-    } });
-
-  server.on("/set_countdown_enabled", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool enableCountdownNow = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      enableCountdownNow = (v == "1" || v == "true" || v == "on");
-    }
-
-    if (countdownEnabled == enableCountdownNow) {
-      Serial.println(F("[WEBSERVER] Countdown enable state unchanged, ignoring."));
-      request->send(200, "application/json", "{\"ok\":true}");
-      return;
-    }
-
-    if (countdownEnabled == true && enableCountdownNow == false) {
-      Serial.println(F("[WEBSERVER] Countdown toggled OFF. Checking display mode..."));
-      if (displayMode == 3) {
-        Serial.println(F("[WEBSERVER] Currently in Countdown mode. Forcing mode advance/cleanup."));
-        advanceDisplayMode();
-      }
-    }
-
-    countdownEnabled = enableCountdownNow;
-    Serial.printf("[WEBSERVER] Set Countdown Enabled to %d\n", countdownEnabled);
+  server.on("/set_units", HTTP_POST, [](AsyncWebServerRequest *request) {
+    bool imperial = getBoolParam(request);
+    strcpy(weatherUnits, imperial ? "imperial" : "metric");
+    tempSymbol = imperial ? ']' : '[';
+    shouldFetchWeatherNow = true;
     request->send(200, "application/json", "{\"ok\":true}"); });
 
-  server.on("/set_dramatic_countdown", HTTP_POST, [](AsyncWebServerRequest *request)
-            {
-    bool enableDramaticNow = false;
-    if (request->hasParam("value", true)) {
-      String v = request->getParam("value", true)->value();
-      enableDramaticNow = (v == "1" || v == "true" || v == "on");
+  server.on("/set_countdown_enabled", HTTP_POST, [](AsyncWebServerRequest *request) {
+    bool enable = getBoolParam(request);
+    if (countdownEnabled && !enable && displayMode == 3) advanceDisplayMode();
+    countdownEnabled = enable;
+    request->send(200, "application/json", "{\"ok\":true}"); });
+
+  server.on("/set_dramatic_countdown", HTTP_POST, [](AsyncWebServerRequest *request) {
+    bool dramatic = getBoolParam(request);
+    if (isDramaticCountdown != dramatic) {
+      isDramaticCountdown = dramatic;
+      saveCountdownConfig(countdownEnabled, countdownTargetTimestamp, countdownLabel);
     }
-
-    // Check if the state has changed
-    if (isDramaticCountdown == enableDramaticNow) {
-      Serial.println(F("[WEBSERVER] Dramatic Countdown state unchanged, ignoring."));
-      request->send(200, "application/json", "{\"ok\":true}");
-      return;
-    }
-
-    // Update the global variable
-    isDramaticCountdown = enableDramaticNow;
-
-    // Call saveCountdownConfig with only the existing parameters.
-    // It will read the updated global variable 'isDramaticCountdown'.
-    saveCountdownConfig(countdownEnabled, countdownTargetTimestamp, countdownLabel);
-
-    Serial.printf("[WEBSERVER] Set Dramatic Countdown to %d\n", isDramaticCountdown);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
   // Captive portal - catch all requests and redirect to root
@@ -1070,13 +985,13 @@ void setupWebServer()
     } });
 
   server.begin();
-  Serial.println(F("[WEBSERVER] Web server started"));
+  DEBUG_PRINTLN(F("[WEBSERVER] Web server started"));
 }
 
 void handleCaptivePortal(AsyncWebServerRequest *request)
 {
-  Serial.print(F("[WEBSERVER] Captive Portal Redirecting: "));
-  Serial.println(request->url());
+  DEBUG_PRINT(F("[WEBSERVER] Captive Portal Redirecting: "));
+  DEBUG_PRINTLN(request->url());
   request->redirect(String("http://") + WiFi.softAPIP().toString() + "/");
 }
 
@@ -1282,32 +1197,32 @@ String buildWeatherURL()
 
 void fetchWeather()
 {
-  Serial.println(F("[WEATHER] Fetching weather data..."));
+  DEBUG_PRINTLN(F("[WEATHER] Fetching weather data..."));
   if (WiFi.status() != WL_CONNECTED)
   {
-    Serial.println(F("[WEATHER] Skipped: WiFi not connected"));
+    DEBUG_PRINTLN(F("[WEATHER] Skipped: WiFi not connected"));
     weatherAvailable = false;
     weatherFetched = false;
     return;
   }
   if (!openWeatherApiKey || strlen(openWeatherApiKey) != 32)
   {
-    Serial.println(F("[WEATHER] Skipped: Invalid API key (must be exactly 32 characters)"));
+    DEBUG_PRINTLN(F("[WEATHER] Skipped: Invalid API key (must be exactly 32 characters)"));
     weatherAvailable = false;
     weatherFetched = false;
     return;
   }
   if (!(strlen(openWeatherCity) > 0 && strlen(openWeatherCountry) > 0))
   {
-    Serial.println(F("[WEATHER] Skipped: City or Country is empty."));
+    DEBUG_PRINTLN(F("[WEATHER] Skipped: City or Country is empty."));
     weatherAvailable = false;
     return;
   }
 
-  Serial.println(F("[WEATHER] Connecting to OpenWeatherMap..."));
+  DEBUG_PRINTLN(F("[WEATHER] Connecting to OpenWeatherMap..."));
   String url = buildWeatherURL();
-  Serial.print(F("[WEATHER] URL: ")); // Use F() with Serial.print
-  Serial.println(url);
+  DEBUG_PRINT(F("[WEATHER] URL: ")); // Use F() with Serial.print
+  DEBUG_PRINTLN(url);
 
   HTTPClient http;   // Create an HTTPClient object
   WiFiClient client; // Create a WiFiClient object
@@ -1316,25 +1231,25 @@ void fetchWeather()
 
   http.setTimeout(10000); // Sets both connection and stream timeout to 10 seconds
 
-  Serial.println(F("[WEATHER] Sending GET request..."));
+  DEBUG_PRINTLN(F("[WEATHER] Sending GET request..."));
   int httpCode = http.GET(); // Send the GET request
 
   if (httpCode == HTTP_CODE_OK)
   { // Check if HTTP response code is 200 (OK)
-    Serial.println(F("[WEATHER] HTTP 200 OK. Reading payload..."));
+    DEBUG_PRINTLN(F("[WEATHER] HTTP 200 OK. Reading payload..."));
 
     String payload = http.getString();
-    Serial.println(F("[WEATHER] Response received."));
-    Serial.print(F("[WEATHER] Payload: ")); // Use F() with Serial.print
-    Serial.println(payload);
+    DEBUG_PRINTLN(F("[WEATHER] Response received."));
+    DEBUG_PRINT(F("[WEATHER] Payload: ")); // Use F() with Serial.print
+    DEBUG_PRINTLN(payload);
 
     DynamicJsonDocument doc(1536); // Adjust size as needed, use ArduinoJson Assistant
     DeserializationError error = deserializeJson(doc, payload);
 
     if (error)
     {
-      Serial.print(F("[WEATHER] JSON parse error: "));
-      Serial.println(error.f_str());
+      DEBUG_PRINT(F("[WEATHER] JSON parse error: "));
+      DEBUG_PRINTLN(error.f_str());
       weatherAvailable = false;
       return;
     }
@@ -1343,12 +1258,12 @@ void fetchWeather()
     {
       float temp = doc[F("main")][F("temp")];
       currentTemp = String((int)round(temp)) + "º";
-      Serial.printf("[WEATHER] Temp: %s\n", currentTemp.c_str());
+      DEBUG_PRINTF("[WEATHER] Temp: %s\n", currentTemp.c_str());
       weatherAvailable = true;
     }
     else
     {
-      Serial.println(F("[WEATHER] Temperature not found in JSON payload"));
+      DEBUG_PRINTLN(F("[WEATHER] Temperature not found in JSON payload"));
       weatherAvailable = false;
       return;
     }
@@ -1356,7 +1271,7 @@ void fetchWeather()
     if (doc.containsKey(F("main")) && doc[F("main")].containsKey(F("humidity")))
     {
       currentHumidity = doc[F("main")][F("humidity")];
-      Serial.printf("[WEATHER] Humidity: %d%%\n", currentHumidity);
+      DEBUG_PRINTF("[WEATHER] Humidity: %d%%\n", currentHumidity);
     }
     else
     {
@@ -1377,16 +1292,16 @@ void fetchWeather()
     }
     else
     {
-      Serial.println(F("[WEATHER] Weather description not found in JSON payload"));
+      DEBUG_PRINTLN(F("[WEATHER] Weather description not found in JSON payload"));
     }
 
     weatherDescription = normalizeWeatherDescription(detailedDesc);
-    Serial.printf("[WEATHER] Description used: %s\n", weatherDescription.c_str());
+    DEBUG_PRINTF("[WEATHER] Description used: %s\n", weatherDescription.c_str());
     weatherFetched = true;
   }
   else
   {
-    Serial.printf("[WEATHER] HTTP GET failed, error code: %d, reason: %s\n", httpCode, http.errorToString(httpCode).c_str());
+    DEBUG_PRINTF("[WEATHER] HTTP GET failed, error code: %d, reason: %s\n", httpCode, http.errorToString(httpCode).c_str());
     weatherAvailable = false;
     weatherFetched = false;
   }
@@ -1407,33 +1322,35 @@ DisplayMode key:
 
 void setup()
 {
+#ifdef DEBUG_SERIAL
   Serial.begin(115200);
   delay(1000);
-  Serial.println();
-  Serial.println(F("[SETUP] Starting setup..."));
+#endif
+  DEBUG_PRINTLN();
+  DEBUG_PRINTLN(F("[SETUP] Starting setup..."));
 
   if (!LittleFS.begin(true))
   {
-    Serial.println(F("[ERROR] LittleFS mount failed in setup! Halting."));
+    DEBUG_PRINTLN(F("[ERROR] LittleFS mount failed in setup! Halting."));
     while (true)
     {
       delay(1000);
       yield();
     }
   }
-  Serial.println(F("[SETUP] LittleFS file system mounted successfully."));
+  DEBUG_PRINTLN(F("[SETUP] LittleFS file system mounted successfully."));
 
-  Serial.println(F("[SETUP] Initializing Parola library..."));
+  DEBUG_PRINTLN(F("[SETUP] Initializing Parola library..."));
   P.begin(); // Initialize Parola library
-  Serial.println(F("[SETUP] Parola library initialized."));
+  DEBUG_PRINTLN(F("[SETUP] Parola library initialized."));
 
-  Serial.println(F("[SETUP] Setting character spacing..."));
+  DEBUG_PRINTLN(F("[SETUP] Setting character spacing..."));
   P.setCharSpacing(0);
-  Serial.println(F("[SETUP] Character spacing set."));
+  DEBUG_PRINTLN(F("[SETUP] Character spacing set."));
 
-  Serial.println(F("[SETUP] Setting font..."));
+  DEBUG_PRINTLN(F("[SETUP] Setting font..."));
   P.setFont(mFactory);
-  Serial.println(F("[SETUP] Font set."));
+  DEBUG_PRINTLN(F("[SETUP] Font set."));
 
   loadConfig(); // This function now has internal yields and prints
 
@@ -1441,32 +1358,49 @@ void setup()
   P.setZoneEffect(0, flipDisplay, PA_FLIP_UD);
   P.setZoneEffect(0, flipDisplay, PA_FLIP_LR);
 
-  Serial.println(F("[SETUP] Parola (LED Matrix) initialized"));
+  DEBUG_PRINTLN(F("[SETUP] Parola (LED Matrix) initialized"));
 
   connectWiFi();
 
   if (isAPMode)
   {
-    Serial.println(F("[SETUP] WiFi connection failed. Device is in AP Mode."));
+    DEBUG_PRINTLN(F("[SETUP] WiFi connection failed. Device is in AP Mode."));
   }
   else if (WiFi.status() == WL_CONNECTED)
   {
-    Serial.println(F("[SETUP] WiFi connected successfully to local network."));
+    DEBUG_PRINTLN(F("[SETUP] WiFi connected successfully to local network."));
   }
   else
   {
-    Serial.println(F("[SETUP] WiFi state is uncertain after connection attempt."));
+    DEBUG_PRINTLN(F("[SETUP] WiFi state is uncertain after connection attempt."));
   }
 
   setupWebServer();
-  Serial.println(F("[SETUP] Webserver setup complete"));
-  Serial.println(F("[SETUP] Setup complete"));
-  Serial.println();
+  DEBUG_PRINTLN(F("[SETUP] Webserver setup complete"));
+  DEBUG_PRINTLN(F("[SETUP] Setup complete"));
+  DEBUG_PRINTLN();
   printConfigToSerial();
   setupTime();
   displayMode = 0;
   lastSwitch = millis();
   lastColonBlink = millis();
+}
+
+void renderPlasmaEffect(unsigned long frameTime)
+{
+  MD_MAX72XX* mx = P.getGraphicObject();
+  uint8_t t = frameTime >> 6;
+
+  for (uint8_t y = 0; y < 8; y++) {
+    uint8_t yy = (y * 32 + t) & 0xFF;
+    for (uint8_t x = 0; x < 32; x++) {
+      uint8_t xx = (x * 8 + t * 2) & 0xFF;
+      uint8_t v = ((xx ^ yy) + (xx & yy)) >> 1;
+      uint8_t d = ((x - 16) * (x - 16) + (y - 4) * (y - 4));
+      v += (d + t) & 0xFF;
+      mx->setPoint(y, x, (v & 64));
+    }
+  }
 }
 
 void advanceDisplayMode()
@@ -1480,27 +1414,27 @@ void advanceDisplayMode()
     if (showDate)
     {
       displayMode = 5; // Date mode right after Clock
-      Serial.println(F("[DISPLAY] Switching to display mode: DATE (from Clock)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DATE (from Clock)"));
     }
     else if (weatherAvailable && (strlen(openWeatherApiKey) == 32) && (strlen(openWeatherCity) > 0) && (strlen(openWeatherCountry) > 0))
     {
       displayMode = 1;
-      Serial.println(F("[DISPLAY] Switching to display mode: WEATHER (from Clock)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: WEATHER (from Clock)"));
     }
     else if (countdownEnabled && !countdownFinished && ntpSyncSuccessful)
     {
       displayMode = 3;
-      Serial.println(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Clock, weather skipped)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Clock, weather skipped)"));
     }
     else if (nightscoutConfigured)
     {
       displayMode = 4; // Clock -> Nightscout (if weather & countdown are skipped)
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Clock, weather & countdown skipped)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Clock, weather & countdown skipped)"));
     }
     else
     {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Staying in CLOCK (from Clock)"));
+      displayMode = 6; // Clock -> Demoscene (if everything else is skipped)
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DEMOSCENE (from Clock)"));
     }
   }
   else if (displayMode == 5)
@@ -1508,22 +1442,22 @@ void advanceDisplayMode()
     if (weatherAvailable && (strlen(openWeatherApiKey) == 32) && (strlen(openWeatherCity) > 0) && (strlen(openWeatherCountry) > 0))
     {
       displayMode = 1;
-      Serial.println(F("[DISPLAY] Switching to display mode: WEATHER (from Date)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: WEATHER (from Date)"));
     }
     else if (countdownEnabled && !countdownFinished && ntpSyncSuccessful)
     {
       displayMode = 3;
-      Serial.println(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Date, weather skipped)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Date, weather skipped)"));
     }
     else if (nightscoutConfigured)
     {
       displayMode = 4;
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Date, weather & countdown skipped)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Date, weather & countdown skipped)"));
     }
     else
     {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Date)"));
+      displayMode = 6;
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DEMOSCENE (from Date)"));
     }
   }
   else if (displayMode == 1)
@@ -1531,22 +1465,22 @@ void advanceDisplayMode()
     if (showWeatherDescription && weatherAvailable && weatherDescription.length() > 0)
     {
       displayMode = 2;
-      Serial.println(F("[DISPLAY] Switching to display mode: DESCRIPTION (from Weather)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DESCRIPTION (from Weather)"));
     }
     else if (countdownEnabled && !countdownFinished && ntpSyncSuccessful)
     {
       displayMode = 3;
-      Serial.println(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Weather)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Weather)"));
     }
     else if (nightscoutConfigured)
     {
       displayMode = 4; // Weather -> Nightscout (if description & countdown are skipped)
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Weather, description & countdown skipped)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Weather, description & countdown skipped)"));
     }
     else
     {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Weather)"));
+      displayMode = 6;
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DEMOSCENE (from Weather)"));
     }
   }
   else if (displayMode == 2)
@@ -1554,36 +1488,41 @@ void advanceDisplayMode()
     if (countdownEnabled && !countdownFinished && ntpSyncSuccessful)
     {
       displayMode = 3;
-      Serial.println(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Description)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Description)"));
     }
     else if (nightscoutConfigured)
     {
       displayMode = 4; // Description -> Nightscout (if countdown is skipped)
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Description, countdown skipped)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Description, countdown skipped)"));
     }
     else
     {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Description)"));
+      displayMode = 6;
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DEMOSCENE (from Description)"));
     }
   }
   else if (displayMode == 3)
-  { // Countdown -> Nightscout
+  { // Countdown -> Nightscout or Demoscene
     if (nightscoutConfigured)
     {
       displayMode = 4;
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Countdown)"));
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Countdown)"));
     }
     else
     {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Countdown)"));
+      displayMode = 6;
+      DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DEMOSCENE (from Countdown)"));
     }
   }
   else if (displayMode == 4)
-  { // Nightscout -> Clock
+  { // Nightscout -> Demoscene
+    displayMode = 6;
+    DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: DEMOSCENE (from Nightscout)"));
+  }
+  else if (displayMode == 6)
+  { // Demoscene -> Clock
     displayMode = 0;
-    Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Nightscout)"));
+    DEBUG_PRINTLN(F("[DISPLAY] Switching to display mode: CLOCK (from Demoscene)"));
   }
 
   // --- Common cleanup/reset logic remains the same ---
@@ -1602,8 +1541,8 @@ bool saveCountdownConfig(bool enabled, time_t targetTimestamp, const String &lab
     configFile.close();
     if (err)
     {
-      Serial.print(F("[saveCountdownConfig] Error parsing config.json: "));
-      Serial.println(err.f_str());
+      DEBUG_PRINT(F("[saveCountdownConfig] Error parsing config.json: "));
+      DEBUG_PRINTLN(err.f_str());
       return false;
     }
   }
@@ -1626,14 +1565,14 @@ bool saveCountdownConfig(bool enabled, time_t targetTimestamp, const String &lab
   File f = LittleFS.open("/config.json", "w");
   if (!f)
   {
-    Serial.println(F("[saveCountdownConfig] ERROR: Cannot write to /config.json"));
+    DEBUG_PRINTLN(F("[saveCountdownConfig] ERROR: Cannot write to /config.json"));
     return false;
   }
 
   size_t bytesWritten = serializeJson(doc, f);
   f.close();
 
-  Serial.printf("[saveCountdownConfig] Config updated. %u bytes written.\n", bytesWritten);
+  DEBUG_PRINTF("[saveCountdownConfig] Config updated. %u bytes written.\n", bytesWritten);
   return true;
 }
 
@@ -1731,7 +1670,7 @@ void loop()
     hourglassPlayed = false;
     countdownFinishedMessageStartTime = millis();
 
-    Serial.println("[SYSTEM] Countdown target reached! Switching to Mode 3 to display finish sequence.");
+    DEBUG_PRINTLN("[SYSTEM] Countdown target reached! Switching to Mode 3 to display finish sequence.");
     yield();
   }
 
@@ -1769,13 +1708,13 @@ void loop()
     time_t now = time(nullptr);
     if (now > 1000)
     { // NTP sync successful
-      Serial.println(F("[TIME] NTP sync successful."));
+      DEBUG_PRINTLN(F("[TIME] NTP sync successful."));
       ntpSyncSuccessful = true;
       ntpState = NTP_SUCCESS;
     }
     else if (millis() - ntpStartTime > ntpTimeout || ntpRetryCount >= maxNtpRetries)
     {
-      Serial.println(F("[TIME] NTP sync failed."));
+      DEBUG_PRINTLN(F("[TIME] NTP sync failed."));
       ntpSyncSuccessful = false;
       ntpState = NTP_FAILED;
     }
@@ -1784,7 +1723,7 @@ void loop()
       // Periodically print a more descriptive status message
       if (millis() - lastNtpStatusPrintTime >= ntpStatusPrintInterval)
       {
-        Serial.printf("[TIME] NTP sync in progress (attempt %d of %d)...\n", ntpRetryCount + 1, maxNtpRetries);
+        DEBUG_PRINTF("[TIME] NTP sync in progress (attempt %d of %d)...\n", ntpRetryCount + 1, maxNtpRetries);
         lastNtpStatusPrintTime = millis();
       }
       // Still increment ntpRetryCount based on your original timing for the timeout logic
@@ -1828,7 +1767,7 @@ void loop()
       ntpRetryCount = 0;
       ntpStartTime = millis();
       ntpState = NTP_SYNCING;
-      Serial.println(F("[TIME] Retrying NTP sync..."));
+      DEBUG_PRINTLN(F("[TIME] Retrying NTP sync..."));
 
       firstRetry = false;
     }
@@ -1849,16 +1788,16 @@ void loop()
     {
       if (shouldFetchWeatherNow)
       {
-        Serial.println(F("[LOOP] Immediate weather fetch requested by web server."));
+        DEBUG_PRINTLN(F("[LOOP] Immediate weather fetch requested by web server."));
         shouldFetchWeatherNow = false;
       }
       else if (!weatherFetchInitiated)
       {
-        Serial.println(F("[LOOP] Initial weather fetch."));
+        DEBUG_PRINTLN(F("[LOOP] Initial weather fetch."));
       }
       else
       {
-        Serial.println(F("[LOOP] Regular interval weather fetch."));
+        DEBUG_PRINTLN(F("[LOOP] Regular interval weather fetch."));
       }
       weatherFetchInitiated = true;
       weatherFetched = false;
@@ -2084,7 +2023,7 @@ void loop()
     {
       if (weatherWasAvailable)
       {
-        Serial.println(F("[DISPLAY] Weather not available, showing clock..."));
+        DEBUG_PRINTLN(F("[DISPLAY] Weather not available, showing clock..."));
         weatherWasAvailable = false;
       }
       if (ntpSyncSuccessful)
@@ -2186,7 +2125,7 @@ void loop()
         countdownFinished = false;
         countdownFinishedMessageStartTime = 0;
         hourglassPlayed = false; // Reset if we decide not to show it
-        Serial.println("[COUNTDOWN-FINISH] Countdown target invalid or not reached yet, skipping 'TIMES UP'. Advancing display.");
+        DEBUG_PRINTLN("[COUNTDOWN-FINISH] Countdown target invalid or not reached yet, skipping 'TIMES UP'. Advancing display.");
         advanceDisplayMode();
         yield();
         return;
@@ -2217,7 +2156,7 @@ void loop()
             delay(350); // This is blocking! (Total ~4.2 seconds for hourglass)
           }
         }
-        Serial.println("[COUNTDOWN-FINISH] Played hourglass animation.");
+        DEBUG_PRINTLN("[COUNTDOWN-FINISH] Played hourglass animation.");
         P.displayClear(); // Clear display after hourglass animation
 
         // 2. Initialize Flashing "TIMES UP" for its very first frame
@@ -2253,7 +2192,7 @@ void loop()
       else
       {
         // 15 seconds are over, clean up and advance
-        Serial.println("[COUNTDOWN-FINISH] Flashing duration over. Advancing to Clock.");
+        DEBUG_PRINTLN("[COUNTDOWN-FINISH] Flashing duration over. Advancing to Clock.");
         countdownShowFinishedMessage = false;
         countdownFinishedMessageStartTime = 0;
         hourglassPlayed = false; // <-- RESET this flag for the next countdown cycle!
@@ -2297,7 +2236,7 @@ void loop()
             if (days > 0)
             {
               currentSegmentText = String(days) + " " + (days == 1 ? "DAY" : "DAYS");
-              Serial.printf("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
+              DEBUG_PRINTF("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
               countdownSegment++;
             }
             else
@@ -2312,7 +2251,7 @@ void loop()
             char buf[10];
             sprintf(buf, "%02ld HRS", hours); // pad hours with 0
             currentSegmentText = String(buf);
-            Serial.printf("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
+            DEBUG_PRINTF("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
             countdownSegment++;
             break;
           }
@@ -2321,7 +2260,7 @@ void loop()
             char buf[10];
             sprintf(buf, "%02ld MINS", minutes); // pad minutes with 0
             currentSegmentText = String(buf);
-            Serial.printf("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
+            DEBUG_PRINTF("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
             countdownSegment++;
             break;
           }
@@ -2335,7 +2274,7 @@ void loop()
             char secondsBuf[10];
             sprintf(secondsBuf, "%02ld %s", currentSecond, currentSecond == 1 ? "SEC" : "SECS");
             String secondsText = String(secondsBuf);
-            Serial.printf("[COUNTDOWN-STATIC] Displaying segment 3: %s\n", secondsText.c_str());
+            DEBUG_PRINTF("[COUNTDOWN-STATIC] Displaying segment 3: %s\n", secondsText.c_str());
             P.displayClear();
             P.setTextAlignment(PA_CENTER);
             P.setCharSpacing(1);
@@ -2387,7 +2326,7 @@ void loop()
             break;
           }
           case 4: // Exit countdown
-            Serial.println("[COUNTDOWN-STATIC] All segments and label displayed. Advancing to Clock.");
+            DEBUG_PRINTLN("[COUNTDOWN-STATIC] All segments and label displayed. Advancing to Clock.");
             countdownSegment = 0;
             segmentStartTime = 0;
             P.setTextAlignment(PA_CENTER);
@@ -2397,7 +2336,7 @@ void loop()
             return;
 
           default:
-            Serial.println("[COUNTDOWN-ERROR] Invalid countdownSegment, resetting.");
+            DEBUG_PRINTLN("[COUNTDOWN-ERROR] Invalid countdownSegment, resetting.");
             countdownSegment = 0;
             segmentStartTime = 0;
             break;
@@ -2501,7 +2440,7 @@ void loop()
       https.setConnectTimeout(5000);
       https.setTimeout(5000);
 
-      Serial.print("[HTTPS] Nightscout fetch initiated...\n");
+      DEBUG_PRINT("[HTTPS] Nightscout fetch initiated...\n");
       int httpCode = https.GET();
 
       if (httpCode == HTTP_CODE_OK)
@@ -2516,16 +2455,16 @@ void loop()
           currentGlucose = firstReading["glucose"] | firstReading["sgv"] | -1;
           currentDirection = firstReading["direction"] | "?";
 
-          Serial.printf("Nightscout data fetched: mg/dL %d %s\n", currentGlucose, currentDirection.c_str());
+          DEBUG_PRINTF("Nightscout data fetched: mg/dL %d %s\n", currentGlucose, currentDirection.c_str());
         }
         else
         {
-          Serial.println("Failed to parse Nightscout JSON");
+          DEBUG_PRINTLN("Failed to parse Nightscout JSON");
         }
       }
       else
       {
-        Serial.printf("[HTTPS] GET failed, error: %s\n", https.errorToString(httpCode).c_str());
+        DEBUG_PRINTF("[HTTPS] GET failed, error: %s\n", https.errorToString(httpCode).c_str());
       }
 
       https.end();
@@ -2573,6 +2512,33 @@ void loop()
       advanceDisplayMode();
       return;
     }
+  }
+
+  // --- DEMOSCENE Display Mode ---
+  else if (displayMode == 6)
+  {
+    static unsigned long demoStartTime = 0;
+
+    // Initialize start time when entering this mode
+    if (demoStartTime == 0 || prevDisplayMode != 6)
+    {
+      demoStartTime = millis();
+      DEBUG_PRINTLN(F("[DISPLAY] Started Demoscene plasma effect"));
+    }
+
+    // Render plasma effect
+    renderPlasmaEffect(millis() - demoStartTime);
+
+    // Check if demo duration has elapsed
+    if (millis() - demoStartTime >= demoDuration)
+    {
+      demoStartTime = 0; // Reset for next time
+      DEBUG_PRINTLN(F("[DISPLAY] Demoscene effect completed, advancing mode"));
+      advanceDisplayMode();
+      return;
+    }
+
+    yield();
   }
 
   // DATE Display Mode

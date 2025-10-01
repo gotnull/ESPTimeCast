@@ -1,7 +1,7 @@
 {
   "ssid": "PANDORIA",
   "password": "Y4sgzz27ox",
-  "openWeatherApiKey": "",
+  "openWeatherApiKey": "be3baa0f4a9f522c638e63027bae5e05",
   "openWeatherCity": "Melbourne",
   "openWeatherCountry": "AU",
   "clockDuration": 10000,
