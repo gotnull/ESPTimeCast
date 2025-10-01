@@ -63,6 +63,29 @@ else
 fi
 
 echo ""
+
+echo -e "${YELLOW}🔎 Checking if port $PORT is busy...${NC}"
+PID=$(lsof -t "$PORT" || echo "")
+if [ -n "$PID" ]; then
+    echo -e "${YELLOW}⚠️  Port $PORT is busy. Process with PID $PID is using it.${NC}"
+    echo -e "   This is likely a serial monitor from a previous session."
+    read -p "   Kill the process? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}🔪 Killing process $PID...${NC}"
+        if kill -9 "$PID"; then
+            echo -e "${GREEN}✅ Process killed.${NC}"
+            sleep 1 # Give the OS a moment to release the port
+        else
+            echo -e "${RED}❌ Failed to kill process $PID.${NC}"
+            exit 1
+        fi
+    else
+        echo "Aborting. Please close the process using the port and try again."
+        exit 1
+    fi
+fi
+
 echo -e "${YELLOW}📤 Step 2: Uploading to device...${NC}"
 if arduino-cli upload -p "$PORT" --fqbn "$FQBN" "$SKETCH_NAME"; then
     echo -e "${GREEN}✅ Upload successful!${NC}"
