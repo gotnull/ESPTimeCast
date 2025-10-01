@@ -1,7 +1,7 @@
 {
   "ssid": "PANDORIA",
   "password": "Y4sgzz27ox",
-  "openWeatherApiKey": "c0a3e9da669747436668700ed1a8f07f",
+  "openWeatherApiKey": "",
   "openWeatherCity": "Melbourne",
   "openWeatherCountry": "AU",
   "clockDuration": 10000,
@@ -14,8 +14,8 @@
   "ntpServer2": "time.nist.gov",
   "twelveHourToggle": false,
   "showDayOfWeek": true,
-  "showDate": false,
-  "showHumidity": false,
+  "showDate": true,
+  "showHumidity": true,
   "colonBlinkEnabled": true,
   "language": "en",
   "dimmingEnabled": false,
@@ -24,12 +24,12 @@
   "dimEndHour": 8,
   "dimEndMinute": 0,
   "dimBrightness": 2,
-  "showWeatherDescription": false,
+  "showWeatherDescription": true,
   "countdown": {
     "enabled": false,
     "targetTimestamp": 0,
     "label": "",
     "isDramaticCountdown": true
   },
-  "scrollSpeed": 100
+  "scrollSpeed": 150
 }

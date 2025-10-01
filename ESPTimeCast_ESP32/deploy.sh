@@ -28,6 +28,25 @@ echo "Port: $PORT"
 echo "Sketch: $SKETCH_NAME"
 echo ""
 
+# Check for .env file and update config.json
+if [ -f ".env" ]; then
+    echo -e "${YELLOW}Found .env file, checking for API key...${NC}"
+    # Export variables from .env file
+    export $(grep -v '^#' .env | xargs)
+    if [ -n "$OPENWEATHER_API_KEY" ]; then
+        echo -e "${GREEN}Found OPENWEATHER_API_KEY in .env file.${NC}"
+        # Use python to update the config.json file
+        python3 -c "import json; config_file = 'data/config.json'; d = json.load(open(config_file)); d['openWeatherApiKey'] = '$OPENWEATHER_API_KEY'; json.dump(d, open(config_file, 'w'), indent=2)"
+        echo -e "${GREEN}✅ Updated data/config.json with the API key.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  OPENWEATHER_API_KEY not found in .env file.${NC}"
+    fi
+elif [ -f ".env.example" ]; then
+    echo -e "${YELLOW}Found .env.example file, but no .env file.${NC}"
+    echo -e "Please copy .env.example to .env and fill in your API key."
+fi
+echo ""
+
 # Check if sketch file exists
 if [ ! -f "$SKETCH_NAME" ]; then
     echo -e "${RED}❌ Error: $SKETCH_NAME not found in current directory${NC}"
