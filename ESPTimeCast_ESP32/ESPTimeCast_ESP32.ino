@@ -1386,20 +1386,152 @@ void setup()
   lastColonBlink = millis();
 }
 
+// Effect 1: Plasma - Dual rotating waves with radial interference
+void renderPlasma(MD_MAX72XX* mx, uint16_t t) {
+  for (uint8_t y = 0; y < 8; y++) {
+    int8_t sy = y - 4;
+    for (uint8_t x = 0; x < 32; x++) {
+      int8_t sx = x - 16;
+      uint8_t dist = (sx*sx + sy*sy);
+      uint8_t v1 = ((x * 5 + t) ^ (y * 7 - t)) & 0xFF;
+      uint8_t v2 = ((x * 3 - t*2) ^ (y * 9 + t)) & 0xFF;
+      uint8_t v3 = (dist * 8 + t * 3) & 0xFF;
+      uint8_t v = (v1 ^ v2) + v3;
+      uint8_t threshold = 128 + ((t & 127) - 64);
+      mx->setPoint(y, x, v > threshold);
+    }
+  }
+}
+
+// Effect 2: Tunnel - 3D tunnel diving effect
+void renderTunnel(MD_MAX72XX* mx, uint16_t t) {
+  for (uint8_t y = 0; y < 8; y++) {
+    int8_t sy = (y - 4) * 8;
+    for (uint8_t x = 0; x < 32; x++) {
+      int8_t sx = (x - 16) * 2;
+      uint16_t dist = sx*sx + sy*sy;
+      if (dist == 0) dist = 1;
+      uint8_t depth = 2048 / dist;
+      uint8_t angle = (x * 8 + y * 32) & 0xFF;
+      uint8_t v = (depth + t * 2) ^ (angle - t);
+      mx->setPoint(y, x, v & 32);
+    }
+  }
+}
+
+// Effect 3: Matrix Rain - Cascading columns
+void renderMatrixRain(MD_MAX72XX* mx, uint16_t t) {
+  static uint8_t drops[32];
+  static uint8_t speeds[32];
+  static bool init = false;
+
+  if (!init || (t & 0x1F) == 0) {
+    for (uint8_t x = 0; x < 32; x++) {
+      drops[x] = (x * 7 + t) & 31;
+      speeds[x] = 1 + ((x * 3) & 3);
+    }
+    init = true;
+  }
+
+  for (uint8_t x = 0; x < 32; x++) {
+    drops[x] = (drops[x] + speeds[x]) & 31;
+    uint8_t head = drops[x] >> 2;
+    for (uint8_t y = 0; y < 8; y++) {
+      uint8_t trail = (head + 8 - y) & 7;
+      bool lit = (trail < 3) && ((x + y + t) & 1);
+      mx->setPoint(y, x, lit);
+    }
+  }
+}
+
+// Effect 4: Starfield - 3D scrolling stars
+void renderStarfield(MD_MAX72XX* mx, uint16_t t) {
+  static uint16_t stars[24];
+  static bool init = false;
+
+  if (!init) {
+    for (uint8_t i = 0; i < 24; i++) {
+      stars[i] = ((i * 127) << 8) | ((i * 83) & 0xFF);
+    }
+    init = true;
+  }
+
+  mx->clear();
+  for (uint8_t i = 0; i < 24; i++) {
+    uint8_t z = (stars[i] & 0xFF) + (t >> 2);
+    stars[i] = (stars[i] & 0xFF00) | z;
+
+    if (z < 32) {
+      int16_t sx = (stars[i] >> 8);
+      int16_t sy = ((sx * 3) & 0xFF);
+      sx = ((sx - 128) * (32 - z)) >> 8;
+      sy = ((sy - 128) * (32 - z)) >> 8;
+      int8_t px = 16 + sx;
+      int8_t py = 4 + (sy >> 4);
+
+      if (px >= 0 && px < 32 && py >= 0 && py < 8) {
+        mx->setPoint(py, px, true);
+        if (z < 8 && px > 0) mx->setPoint(py, px-1, true);
+      }
+    }
+  }
+}
+
+// Effect 5: Fire - Rising flames simulation
+void renderFire(MD_MAX72XX* mx, uint16_t t) {
+  static uint8_t heat[32];
+
+  // Add heat at bottom
+  for (uint8_t x = 0; x < 32; x++) {
+    if ((t + x) & 3) {
+      heat[x] = 255 - ((x ^ t) & 31);
+    }
+  }
+
+  // Render with rising and spreading
+  for (int8_t y = 7; y >= 0; y--) {
+    for (uint8_t x = 0; x < 32; x++) {
+      uint8_t h = heat[x];
+
+      // Cool down as it rises
+      if (y < 7) h = (h * (7 - y)) >> 3;
+
+      // Spread from neighbors
+      if (x > 0) h = (h + heat[x-1]) >> 1;
+      if (x < 31) h = (h + heat[x+1]) >> 1;
+
+      mx->setPoint(y, x, h > (128 + ((y * 16) ^ t)));
+    }
+  }
+
+  // Cool down base
+  for (uint8_t x = 0; x < 32; x++) {
+    heat[x] = (heat[x] * 230) >> 8;
+  }
+}
+
 void renderPlasmaEffect(unsigned long frameTime)
 {
-  MD_MAX72XX* mx = P.getGraphicObject();
-  uint8_t t = frameTime >> 6;
+  static uint8_t effectIndex = 0;
+  static unsigned long lastEffectChange = 0;
+  const unsigned long EFFECT_DURATION = 2000; // 2 seconds per effect
 
-  for (uint8_t y = 0; y < 8; y++) {
-    uint8_t yy = (y * 32 + t) & 0xFF;
-    for (uint8_t x = 0; x < 32; x++) {
-      uint8_t xx = (x * 8 + t * 2) & 0xFF;
-      uint8_t v = ((xx ^ yy) + (xx & yy)) >> 1;
-      uint8_t d = ((x - 16) * (x - 16) + (y - 4) * (y - 4));
-      v += (d + t) & 0xFF;
-      mx->setPoint(y, x, (v & 64));
-    }
+  MD_MAX72XX* mx = P.getGraphicObject();
+  uint16_t t = frameTime >> 5;
+
+  // Switch effects every 2 seconds
+  if (frameTime - lastEffectChange > EFFECT_DURATION) {
+    lastEffectChange = frameTime;
+    effectIndex = (effectIndex + 1) % 5;
+    mx->clear();
+  }
+
+  switch(effectIndex) {
+    case 0: renderPlasma(mx, t); break;
+    case 1: renderTunnel(mx, t); break;
+    case 2: renderMatrixRain(mx, t); break;
+    case 3: renderStarfield(mx, t); break;
+    case 4: renderFire(mx, t); break;
   }
 }
 
