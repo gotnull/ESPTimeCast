@@ -29,8 +29,6 @@ MD_Parola P = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 AsyncWebServer server(80);
 
 // --- Global Scroll Speed Settings ---
-const int GENERAL_SCROLL_SPEED = 85; // Default: Adjust this for Weather Description and Countdown Label (e.g., 50 for faster, 200 for slower)
-const int IP_SCROLL_SPEED = 115;     // Default: Adjust this for the IP Address display (slower for readability)
 
 // WiFi and configuration globals
 char ssid[32] = "";
@@ -56,6 +54,7 @@ bool showHumidity = false;
 bool colonBlinkEnabled = true;
 char ntpServer1[64] = "pool.ntp.org";
 char ntpServer2[256] = "time.nist.gov";
+int scrollSpeed = 100;
 
 // Dimming
 bool dimmingEnabled = false;
@@ -270,6 +269,7 @@ void loadConfig()
 
   strlcpy(ntpServer1, doc["ntpServer1"] | "pool.ntp.org", sizeof(ntpServer1));
   strlcpy(ntpServer2, doc["ntpServer2"] | "time.nist.gov", sizeof(ntpServer2));
+  scrollSpeed = doc["scrollSpeed"] | 100;
 
   if (strcmp(weatherUnits, "imperial") == 0)
     tempSymbol = ']';
@@ -401,7 +401,7 @@ void connectWiFi()
       P.displayClear();
       P.setCharSpacing(1); // Set spacing for IP scroll
       textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-      P.displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, IP_SCROLL_SPEED);
+      P.displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, scrollSpeed);
       // --- END IP Display initiation ---
 
       animating = false; // Exit the connection loop
@@ -1731,7 +1731,7 @@ void loop()
       if (ipDisplayCount < ipDisplayMax)
       {
         textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-        P.displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, 120);
+        P.displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, scrollSpeed);
       }
       else
       {
@@ -2018,7 +2018,7 @@ void loop()
         P.displayText(
             timeString.c_str(),
             PA_CENTER,
-            GENERAL_SCROLL_SPEED,
+            scrollSpeed,
             0,
             inDir,
             PA_NO_EFFECT);
@@ -2107,7 +2107,7 @@ void loop()
       if (!descScrolling)
       {
         textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-        P.displayScroll(descBuffer, PA_CENTER, actualScrollDirection, GENERAL_SCROLL_SPEED);
+        P.displayScroll(descBuffer, PA_CENTER, actualScrollDirection, scrollSpeed);
         descScrolling = true;
         descScrollEndTime = 0; // reset end time at start
       }
@@ -2363,7 +2363,7 @@ void loop()
             P.setTextAlignment(PA_LEFT);
             P.setCharSpacing(1);
             textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-            P.displayScroll(label.c_str(), PA_LEFT, actualScrollDirection, GENERAL_SCROLL_SPEED);
+            P.displayScroll(label.c_str(), PA_LEFT, actualScrollDirection, scrollSpeed);
 
             while (!P.displayAnimate())
             {
@@ -2443,7 +2443,7 @@ void loop()
         P.setTextAlignment(PA_LEFT);
         P.setCharSpacing(1);
         textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-        P.displayScroll(fullString.c_str(), PA_LEFT, actualScrollDirection, GENERAL_SCROLL_SPEED);
+        P.displayScroll(fullString.c_str(), PA_LEFT, actualScrollDirection, scrollSpeed);
 
         // Blocking loop to ensure the full message scrolls
         while (!P.displayAnimate())

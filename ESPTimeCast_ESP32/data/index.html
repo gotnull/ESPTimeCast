@@ -574,6 +574,11 @@ textarea::placeholder {
         <label style="margin-top: 1.75rem;">Brightness: <span id="brightnessValue">10</span></label>
         <input style="width: 100%;" type="range" min="0" max="15" name="brightness" id="brightnessSlider" value="10" 
         oninput="brightnessValue.textContent = brightnessSlider.value; setBrightnessLive(this.value);">
+        <br>
+
+        <label style="margin-top: 1.75rem;">Scroll Speed: <span id="scrollSpeedValue">100</span></label>
+        <input style="width: 100%;" type="range" min="10" max="200" name="scrollSpeed" id="scrollSpeedSlider" value="100" 
+        oninput="scrollSpeedValue.textContent = scrollSpeedSlider.value;">
         <br><br><br>
 
           <label style="display: flex; align-items: center; justify-content: space-between;">
@@ -703,6 +708,8 @@ window.onload = function () {
       document.getElementById('showHumidity').checked = !!data.showHumidity;
       document.getElementById('colonBlinkEnabled').checked = !!data.colonBlinkEnabled;
       document.getElementById('showWeatherDescription').checked = !!data.showWeatherDescription;
+      document.getElementById('scrollSpeedSlider').value = typeof data.scrollSpeed !== "undefined" ? data.scrollSpeed : 100;
+      document.getElementById('scrollSpeedValue').textContent = document.getElementById('scrollSpeedSlider').value;
       // Dimming controls
 const dimmingEnabledEl = document.getElementById('dimmingEnabled');
 const isDimming = (data.dimmingEnabled === true || data.dimmingEnabled === "true" || data.dimmingEnabled === 1);
@@ -871,6 +878,7 @@ async function submitConfig(event) {
   formData.set('dimBrightness', document.getElementById('dimBrightness').value);
   formData.set('showWeatherDescription', document.getElementById('showWeatherDescription').checked ? 'on' : '');
   formData.set('weatherUnits', document.getElementById('weatherUnits').checked ? 'imperial' : 'metric');
+  formData.set('scrollSpeed', document.getElementById('scrollSpeedSlider').value);
 
   // --- NEW: Countdown Form Data ---
   formData.set('countdownEnabled', document.getElementById('countdownEnabled').checked ? 'true' : 'false');

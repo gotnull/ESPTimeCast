@@ -48,12 +48,18 @@ if [ ! -e "$PORT" ]; then
     fi
 fi
 
-echo -e "${YELLOW}📦 Step 1: Compiling sketch...${NC}"
-if arduino-cli compile --fqbn "$FQBN" "$SKETCH_NAME"; then
-    echo -e "${GREEN}✅ Compilation successful!${NC}"
+read -p "Compile sketch? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}📦 Step 1: Compiling sketch...${NC}"
+    if arduino-cli compile --fqbn "$FQBN" "$SKETCH_NAME"; then
+        echo -e "${GREEN}✅ Compilation successful!${NC}"
+    else
+        echo -e "${RED}❌ Compilation failed!${NC}"
+        exit 1
+    fi
 else
-    echo -e "${RED}❌ Compilation failed!${NC}"
-    exit 1
+    echo "Skipping compilation."
 fi
 
 echo ""

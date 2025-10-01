@@ -30,5 +30,6 @@
     "targetTimestamp": 0,
     "label": "",
     "isDramaticCountdown": true
-  }
+  },
+  "scrollSpeed": 100
 }
