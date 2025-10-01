@@ -578,7 +578,7 @@ textarea::placeholder {
 
         <label style="margin-top: 1.75rem;">Scroll Speed: <span id="scrollSpeedValue">100</span></label>
         <input style="width: 100%;" type="range" min="10" max="200" name="scrollSpeed" id="scrollSpeedSlider" value="100" 
-        oninput="scrollSpeedValue.textContent = scrollSpeedSlider.value;">
+        oninput="scrollSpeedValue.textContent = scrollSpeedSlider.value; setScrollSpeedLive(this.value);">
         <br><br><br>
 
           <label style="display: flex; align-items: center; justify-content: space-between;">
@@ -1134,6 +1134,14 @@ function setBrightnessLive(val) {
     .then(res => res.json())
     .catch(e => {}); // Optionally handle errors
   }, 150); // 150ms debounce, adjust as needed
+}
+
+function setScrollSpeedLive(val) {
+  fetch('/set_scroll_speed', {
+    method: 'POST',
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "value=" + encodeURIComponent(val)
+  });
 }
 
 function setFlipDisplay(val) {

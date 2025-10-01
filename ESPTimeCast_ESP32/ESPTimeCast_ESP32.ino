@@ -872,6 +872,19 @@ void setupWebServer()
     Serial.printf("[WEBSERVER] Set brightness to %d\n", brightness);
     request->send(200, "application/json", "{\"ok\":true}"); });
 
+  server.on("/set_scroll_speed", HTTP_POST, [](AsyncWebServerRequest *request)
+            {
+    if (!request->hasParam("value", true)) {
+      request->send(400, "application/json", "{\"error\":\"Missing value\"}");
+      return;
+    }
+    int newScrollSpeed = request->getParam("value", true)->value().toInt();
+    if (newScrollSpeed < 10) newScrollSpeed = 10;
+    if (newScrollSpeed > 200) newScrollSpeed = 200;
+    scrollSpeed = newScrollSpeed;
+    Serial.printf("[WEBSERVER] Set scrollSpeed to %d\n", scrollSpeed);
+    request->send(200, "application/json", "{\"ok\":true}"); });
+
   server.on("/set_flip", HTTP_POST, [](AsyncWebServerRequest *request)
             {
     bool flip = false;
