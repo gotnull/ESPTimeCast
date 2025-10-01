@@ -20,9 +20,10 @@
 
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
 #define MAX_DEVICES 4
-#define CLK_PIN 13
-#define CS_PIN 15
-#define DATA_PIN 12
+
+#define CLK_PIN 2  // orange
+#define CS_PIN 3   // green
+#define DATA_PIN 4 // yellow
 
 MD_Parola P = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 AsyncWebServer server(80);
@@ -621,8 +622,7 @@ void setupWebServer()
     } else {
       Serial.println(F("[WEBSERVER] index.html not found in LittleFS"));
       request->send(404, "text/plain", "index.html not found. Upload data folder to LittleFS.");
-    }
-  });
+    } });
 
   server.on("/config.json", HTTP_GET, [](AsyncWebServerRequest *request)
             {
@@ -1048,13 +1048,13 @@ void setupWebServer()
     request->send(200, "application/json", "{\"ok\":true}"); });
 
   // Captive portal - catch all requests and redirect to root
-  server.onNotFound([](AsyncWebServerRequest *request) {
+  server.onNotFound([](AsyncWebServerRequest *request)
+                    {
     if (isAPMode) {
       handleCaptivePortal(request);
     } else {
       request->send(404, "text/plain", "Not Found");
-    }
-  });
+    } });
 
   server.begin();
   Serial.println(F("[WEBSERVER] Web server started"));
@@ -1410,10 +1410,18 @@ void setup()
   }
   Serial.println(F("[SETUP] LittleFS file system mounted successfully."));
 
+  Serial.println(F("[SETUP] Initializing Parola library..."));
   P.begin(); // Initialize Parola library
+  Serial.println(F("[SETUP] Parola library initialized."));
 
+  Serial.println(F("[SETUP] Setting character spacing..."));
   P.setCharSpacing(0);
+  Serial.println(F("[SETUP] Character spacing set."));
+
+  Serial.println(F("[SETUP] Setting font..."));
   P.setFont(mFactory);
+  Serial.println(F("[SETUP] Font set."));
+
   loadConfig(); // This function now has internal yields and prints
 
   P.setIntensity(brightness);

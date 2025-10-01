@@ -6,12 +6,8 @@
 set -e  # Exit on any error
 
 # Configuration
-# FQBN="esp32:esp32:esp32c3:CDCOnBoot=cdc"
-FQBN="esp32:esp32:ttgo-t1"
-
-PORT="/dev/cu.usbserial-0206671E" # TTGO-T1
-# PORT="/dev/cu.usbserial-0206671E" # TTGO-T1
-
+FQBN="esp32:esp32:esp32c3:CDCOnBoot=cdc"
+PORT="/dev/cu.usbmodem13301"
 BAUDRATE="115200"
 SKETCH_NAME="ESPTimeCast_ESP32.ino"
 DATA_DIR="data"
@@ -83,7 +79,7 @@ if [ -d "$DATA_DIR" ] && [ "$(ls -A $DATA_DIR)" ]; then
             echo -e "${GREEN}✅ LittleFS image created!${NC}"
 
             echo -e "${YELLOW}⬆️  Uploading LittleFS image...${NC}"
-            if python3 -m esptool --chip esp32 --port "$PORT" write-flash 0x290000 littlefs.bin; then
+            if python3 -m esptool --chip esp32c3 --port "$PORT" write-flash 0x290000 littlefs.bin; then
                 echo -e "${GREEN}✅ Data folder uploaded successfully!${NC}"
                 rm littlefs.bin
             else
